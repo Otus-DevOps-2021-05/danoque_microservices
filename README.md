@@ -458,10 +458,9 @@ CONTAINER ID   IMAGE                     COMMAND       CREATED       STATUS     
 520a9e38971d   danoque/otus-reddit:1.0   "/start.sh"   7 weeks ago   Exited (1) 7 weeks ago               reddit2
 ```
 
-### ДЗ 17. Docker. Микросервисы
+# ДЗ 17. Docker. Микросервисы
 
-Подготовка
-Подключаемся к ранее созданному Docker host’у:
+Подключимся к ранее созданному Docker host’у:
 
 ```
 $ docker-machine ls
