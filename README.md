@@ -451,14 +451,15 @@ $ docker push danoque/otus-reddit:1.0
 docker run --name reddit -d -p 9292:9292 danoque/otus-reddit:1.0
 Unable to find image 'danoque/otus-reddit:1.0' locally
 1.0: Pulling from danoque/otus-reddit
-
-
+```
+```
 danoque@danoque:~/Devops/Docker/danoque_microservices/dockermonolith$ docker ps
 CONTAINER ID   IMAGE                     COMMAND       CREATED       STATUS                     PORTS     NAMES
 520a9e38971d   danoque/otus-reddit:1.0   "/start.sh"   7 weeks ago   Exited (1) 7 weeks ago               reddit2
-
+```
 
 ### ДЗ 17. Docker. Микросервисы
+
 Подготовка
 Подключаемся к ранее созданному Docker host’у:
 
@@ -471,8 +472,8 @@ post-py - сервис отвечающий за написание постов
 comment - сервис отвечающий за написание комментариев
 ui - веб-интерфейс, работающий с другими сервисами
 
-Применим линтер для оптимизации Dockerfile:
-### 1) comment
+Применим линтер для оптимизации Dockerfile на примере comment:
+
 ```
 danoque@danoque:~/Devops/docker-3/src/comment$ hadolint Dockerfile 
 Dockerfile:2 DL3008 warning: Pin versions in apt get install. Instead of `apt-get install <package>` use `apt-get install <package>=<version>`
