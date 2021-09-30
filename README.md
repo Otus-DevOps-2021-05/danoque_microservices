@@ -451,8 +451,93 @@ $ docker push danoque/otus-reddit:1.0
 docker run --name reddit -d -p 9292:9292 danoque/otus-reddit:1.0
 Unable to find image 'danoque/otus-reddit:1.0' locally
 1.0: Pulling from danoque/otus-reddit
-
-
+```
+```
 danoque@danoque:~/Devops/Docker/danoque_microservices/dockermonolith$ docker ps
 CONTAINER ID   IMAGE                     COMMAND       CREATED       STATUS                     PORTS     NAMES
 520a9e38971d   danoque/otus-reddit:1.0   "/start.sh"   7 weeks ago   Exited (1) 7 weeks ago               reddit2
+```
+
+# ДЗ 17. Docker. Микросервисы
+
+Подключимся к ранее созданному Docker host’у:
+
+```
+$ docker-machine ls
+$ eval $(docker-machine env docker-host)
+```
+Локально сохраним файлы в каталог src, он станет главным рабочим каталогом, в котором расположатся:
+post-py - сервис отвечающий за написание постов
+comment - сервис отвечающий за написание комментариев
+ui - веб-интерфейс, работающий с другими сервисами
+
+Применим линтер для оптимизации Dockerfile на примере comment:
+
+```
+danoque@danoque:~/Devops/docker-3/src/comment$ hadolint Dockerfile 
+Dockerfile:2 DL3008 warning: Pin versions in apt get install. Instead of `apt-get install <package>` use `apt-get install <package>=<version>`
+Dockerfile:2 DL3009 info: Delete the apt-get lists after installing something
+Dockerfile:2 DL3015 info: Avoid additional packages by specifying `--no-install-recommends`
+Dockerfile:6 DL3020 error: Use COPY instead of ADD for files and folders
+```
+Постараемся исправить все недочёты + перепишем команды для RUN под более легкий alpine:
+
+FROM ruby:2.3-alpine
+
+ENV APP_HOME /app
+RUN mkdir $APP_HOME
+WORKDIR $APP_HOME
+
+COPY Gemfile* $APP_HOME/
+RUN apt-get update -qq --no-install-recommends\
+&& apt-get install -y --no-install-recommends\
+&& build-essential --no-install-recommends\
+&& bundle install --no-install-recommends\
+&& apt-get clean && rm -rf /var/lib/apt/lists/*
+
+
+COPY . $APP_HOME
+
+
+ENV COMMENT_DATABASE_HOST comment_db
+ENV COMMENT_DATABASE comment
+
+CMD ["puma"]
+
+Выполним анологичные манипуляции с Dockerfile для "post" и "ui".
+Выполним сборку приложения:
+Скачаем последний образ MongoDB:
+```
+docker pull mongo:latest
+```
+Соберем образы с нашими сервисами:
+```
+docker build -t danoque/post:1.0 ./post-py
+docker build -t danoque/comment:1.0 ./comment
+docker build -t danoque/ui:1.0 ./ui
+```
+Создадим специальную сеть для приложения:
+```
+docker network create reddit
+```
+И запустим наши контейнеры:
+```
+docker run -d --network=reddit --network-alias=post_db --network-alias=comment_db -v reddit_db:/data/db mongo:latest
+docker run -d --network=reddit --network-alias=post danoque/post:1.0
+docker run -d --network=reddit --network-alias=comment danoque/comment:1.0
+docker run -d --network=reddit -p 9292:9292 danoque/ui:2.0
+```
+Проекты успешно собираются и сервис доступен.Теперь, чтобы добавить возможность сохранения постов после остановки и запуска контейнеров выполним следующие инструкции:
+
+Выключим старые копии контейнеров:
+```
+docker kill $(docker ps -q)
+```
+Запустим новые копии контейнеров:
+
+```
+docker run -d --network=reddit --network-alias=post_db --network-alias=comment_db -v reddit_db:/data/db mongo:latest
+docker run -d --network=reddit --network-alias=post danoque/post:1.0
+docker run -d --network=reddit --network-alias=comment danoque/comment:1.0
+docker run -d --network=reddit -p 9292:9292 danoque/ui:2.0
+```
