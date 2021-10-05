@@ -541,3 +541,240 @@ docker run -d --network=reddit --network-alias=post danoque/post:1.0
 docker run -d --network=reddit --network-alias=comment danoque/comment:1.0
 docker run -d --network=reddit -p 9292:9292 danoque/ui:2.0
 ```
+
+
+
+# Домашнее задание №18 Сетевое взаимодействие Docker контейнеров. Docker Compose. Тестирование образов
+##  15 ДЗ: Практика работы с основными типами Docker сетей. Декларативное описание Docker инфраструктуры при помощи Docker Compose.
+### Подключаемся к ранее созданному docker host’у
+```
+> docker-machine ls
+NAME
+ACTIVE
+docker-host
+-
+DRIVER
+google
+STATE
+Running
+URL
+SWARM
+tcp://<docker-host-ip>:2376
+DOCKER
+v17.09.0-ce
+```
+```
+> eval $(docker-machine env docker-host)
+```
+
+Создадим bridge-сеть в docker (флаг --driver указывать не обязательно, т.к. по-умолчанию используется bridge:
+```
+> docker network create reddit --driver bridge
+Запустим наш проект reddit с использованием bridge-сети
+> docker run -d --network=reddit mongo:latest
+> docker run -d --network=reddit <your-dockerhub-login>/post:1.0
+> docker run -d --network=reddit <your-dockerhub-login>/comment:1.0
+> docker run -d --network=reddit -p 9292:9292 <your-dockerhub-login>/ui:1.0
+```
+
+На самом деле, наши сервисы ссылаются друг на друга по dns-
+именам, прописанным в ENV-переменных (см Dockerfile). В текущей
+инсталляции встроенный DNS docker не знает ничего об этих
+именах.
+Решением проблемы будет присвоение контейнерам имен или
+сетевых алиасов при старте:
+```
+--name <name> (можно задать только 1 имя)
+--network-alias <alias-name> (можно задать множество алиасов)
+```
+
+Остановим старые копии контейнеров:
+```
+> docker kill $(docker ps -q)
+```
+Запустим новые:
+```
+> docker run -d --network=reddit --network-alias=post_db --network-
+```
+```
+alias=comment_db mongo:latest
+> docker run -d --network=reddit --network-alias=post danoque/post:
+1.0
+> docker run -d --network=reddit --network-alias=comment
+comment:1.0
+danoque/
+> docker run -d --network=reddit -p 9292:9292 danoque/ui:1.0
+```
+
+Давайте запустим наш проект в 2-х bridge сетях. Так , чтобы сервис ui
+не имел доступа к базе данных в соответствии со схемой ниже. Остановим старые копии контейнеров:
+```
+> docker kill $(docker ps -q)
+```
+Создадим docker-сети:
+```
+> docker network create back_net --subnet=10.0.2.0/24
+> docker network create front_net --subnet=10.0.1.0/24
+```
+
+Docker при инициализации контейнера может подключить к нему только 1 сеть.
+При этом контейнеры из соседних сетей не будут доступны как в DNS, так
+и для взаимодействия по сети. Поэтому нужно поместить контейнеры post и comment в обе сети.
+Дополнительные сети подключаются командой:
+```
+> docker network connect <network> <container>
+```
+Подключим контейнеры ко второй сети:
+```
+> docker network connect front_net post
+> docker network connect front_net comment
+```
+
+Давайте посмотрим как выглядит сетевой стек Linux в
+текущий момент, опираясь на схему из предыдущего
+слайда:
+1) Зайдём по ssh на docker-host и установите пакет bridge-utils:
+```
+> docker-machine ssh docker-host
+> sudo apt-get update && sudo apt-get install bridge-utils
+```
+3) Выполним:
+```
+> docker network ls
+```
+4) Найдём ID сетей, созданных в рамках проекта:
+```
+yc-user@docker-host6:~$ sudo docker network ls
+NETWORK ID     NAME        DRIVER    SCOPE
+884aeb9b795a   back_net    bridge    local
+0873e63bbe3a   bridge      bridge    local
+7a467eadfd14   front_net   bridge    local
+4ecd432d4a5e   host        host      local
+9b1eaacf4bba   none        null      local
+36b3d5878b6c   reddit      bridge    local
+cd7674c32c9e   reddit2     bridge    local
+```
+
+4) Выполним :
+```
+> ifconfig | grep br
+```
+```
+yc-user@docker-host6:~$ ifconfig | grep br
+br-36b3d5878b6c: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        inet 172.18.0.1  netmask 255.255.0.0  broadcast 172.18.255.255
+br-7a467eadfd14: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 10.0.1.1  netmask 255.255.255.0  broadcast 10.0.1.255
+br-884aeb9b795a: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 10.0.2.1  netmask 255.255.255.0  broadcast 10.0.2.255
+br-cd7674c32c9e: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        inet 172.19.0.1  netmask 255.255.0.0  broadcast 172.19.255.255
+        inet 172.17.0.1  netmask 255.255.0.0  broadcast 172.17.255.255
+        inet 10.130.0.7  netmask 255.255.255.0  broadcast 10.130.0.255
+```
+5) Найдём bridge-интерфейсы для каждой из сетей. Просмотрим
+информацию о каждом.
+6) Выберим любой из bridge-интерфейсов и выполним команду. Ниже
+пример вывода:
+```
+yc-user@docker-host6:~$ brctl show br-36b3d5878b6c
+bridge name	bridge id		STP enabled	interfaces
+br-36b3d5878b6c		8000.0242945cd971	no	
+```
+```
+yc-user@docker-host6:~$ brctl show br-7a467eadfd14
+bridge name	bridge id		STP enabled	interfaces
+br-7a467eadfd14		8000.02424f04624b	no		veth5fbc5bc
+							veth660913e
+							veth95e90f0
+```
+
+
+```
+yc-user@docker-host6:~$ brctl show br-884aeb9b795a
+bridge name	bridge id		STP enabled	interfaces
+br-884aeb9b795a		8000.02420e790119	no		veth026f3cb
+							veth3db4cb7
+							vethd29882b
+```
+
+```
+yc-user@docker-host6:~$ brctl show br-cd7674c32c9e
+bridge name	bridge id		STP enabled	interfaces
+br-cd7674c32c9e		8000.0242da6fbc64	no		
+```
+
+7) Давайте посмотрим как выглядит iptables. Выполним:
+```
+yc-user@docker-host6:~$ sudo iptables -nL -t nat
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination         
+DOCKER     all  --  0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+DOCKER     all  --  0.0.0.0/0           !127.0.0.0/8          ADDRTYPE match dst-type LOCAL
+
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination         
+MASQUERADE  all  --  10.0.1.0/24          0.0.0.0/0           
+MASQUERADE  all  --  10.0.2.0/24          0.0.0.0/0           
+MASQUERADE  all  --  172.19.0.0/16        0.0.0.0/0           
+MASQUERADE  all  --  172.17.0.0/16        0.0.0.0/0           
+MASQUERADE  all  --  172.18.0.0/16        0.0.0.0/0           
+MASQUERADE  tcp  --  10.0.1.2             10.0.1.2             tcp dpt:9292
+
+Chain DOCKER (2 references)
+target     prot opt source               destination         
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+DNAT       tcp  --  0.0.0.0/0            0.0.0.0/0            tcp dpt:9292 to:10.0.1.2:9292
+```
+Цепочка Docker и правила DNAT отвечают за перенаправление трафика на адреса уже конкретных контейнеров.
+
+Выполним команду:
+```
+yc-user@docker-host6:~$ ps ax | grep docker-proxy
+ 3886 ?        Sl     0:00 /usr/bin/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 9292 -container-ip 10.0.1.2 -container-port 9292
+ 3893 ?        Sl     0:00 /usr/bin/docker-proxy -proto tcp -host-ip :: -host-port 9292 -container-ip 10.0.1.2 -container-port 9292
+11380 pts/0    S+     0:00 grep --color=auto docker-proxy
+```
+### DOCKER-COMPOSE
+Отметим, что docker-compose поддерживает интерполяцию (подстановку) переменных окружения. В данном случае это переменная USERNAME.
+Поэтому перед запуском необходимо экспортировать значения данных переменных окружения.
+Остановим контейнеры, запущенные на предыдущих шагах:
+```
+> docker kill $(docker ps -q)
+```
+Выполним:
+```
+> export USERNAME=danoque
+> docker-compose up -d
+Creating src_comment_1 ... done
+Creating src_ui_1      ... done
+Creating src_post_1    ... done
+Creating src_post_db_1 ... done
+```
+```
+> danoque@danoque:~/Devops/docker-3/src$ docker-compose ps
+    Name                  Command             State                    Ports                  
+----------------------------------------------------------------------------------------------
+src_comment_1   puma                          Up                                              
+src_post_1      python3 post_app.py           Up                                              
+src_post_db_1   docker-entrypoint.sh mongod   Up      27017/tcp                               
+src_ui_1        puma                          Up      0.0.0.0:9292->9292/tcp,:::9292->9292/tcp
+```
+
+### Задания:
+1)Изменить docker-compose под кейс с множеством сетей, сетевых алиасов. Параметризируем с помощью переменных окружений.Параметризованные параметры запишим в отдельный файл c расширением .env:
+• порт публикации сервиса ui
+• версии сервисов
+
+### Параметризация сетей в Docker-Compose
+Для определения имени проекта базовое имя проекта задаётся через COMPOSE_PROJECT_NAME также в файле .ENV.
