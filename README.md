@@ -778,3 +778,487 @@ src_ui_1        puma                          Up      0.0.0.0:9292->9292/tcp,:::
 
 ### Параметризация сетей в Docker-Compose
 Для определения имени проекта базовое имя проекта задаётся через COMPOSE_PROJECT_NAME также в файле .ENV.
+
+
+
+
+# Домашнее задание №18 Сетевое взаимодействие Docker контейнеров. Docker Compose. Тестирование образов
+##  15 ДЗ: Практика работы с основными типами Docker сетей. Декларативное описание Docker инфраструктуры при помощи Docker Compose.
+### Подключаемся к ранее созданному docker host’у
+```
+> docker-machine ls
+NAME
+ACTIVE
+docker-host
+-
+DRIVER
+google
+STATE
+Running
+URL
+SWARM
+tcp://<docker-host-ip>:2376
+DOCKER
+v17.09.0-ce
+```
+```
+> eval $(docker-machine env docker-host)
+```
+
+Создадим bridge-сеть в docker (флаг --driver указывать не обязательно, т.к. по-умолчанию используется bridge:
+```
+> docker network create reddit --driver bridge
+Запустим наш проект reddit с использованием bridge-сети
+> docker run -d --network=reddit mongo:latest
+> docker run -d --network=reddit <your-dockerhub-login>/post:1.0
+> docker run -d --network=reddit <your-dockerhub-login>/comment:1.0
+> docker run -d --network=reddit -p 9292:9292 <your-dockerhub-login>/ui:1.0
+```
+
+На самом деле, наши сервисы ссылаются друг на друга по dns-
+именам, прописанным в ENV-переменных (см Dockerfile). В текущей
+инсталляции встроенный DNS docker не знает ничего об этих
+именах.
+Решением проблемы будет присвоение контейнерам имен или
+сетевых алиасов при старте:
+```
+--name <name> (можно задать только 1 имя)
+--network-alias <alias-name> (можно задать множество алиасов)
+```
+
+Остановим старые копии контейнеров:
+```
+> docker kill $(docker ps -q)
+```
+Запустим новые:
+```
+> docker run -d --network=reddit --network-alias=post_db --network-
+```
+```
+alias=comment_db mongo:latest
+> docker run -d --network=reddit --network-alias=post danoque/post:
+1.0
+> docker run -d --network=reddit --network-alias=comment
+comment:1.0
+danoque/
+> docker run -d --network=reddit -p 9292:9292 danoque/ui:1.0
+```
+
+Давайте запустим наш проект в 2-х bridge сетях. Так , чтобы сервис ui
+не имел доступа к базе данных в соответствии со схемой ниже. Остановим старые копии контейнеров:
+```
+> docker kill $(docker ps -q)
+```
+Создадим docker-сети:
+```
+> docker network create back_net --subnet=10.0.2.0/24
+> docker network create front_net --subnet=10.0.1.0/24
+```
+
+Docker при инициализации контейнера может подключить к нему только 1 сеть.
+При этом контейнеры из соседних сетей не будут доступны как в DNS, так
+и для взаимодействия по сети. Поэтому нужно поместить контейнеры post и comment в обе сети.
+Дополнительные сети подключаются командой:
+```
+> docker network connect <network> <container>
+```
+Подключим контейнеры ко второй сети:
+```
+> docker network connect front_net post
+> docker network connect front_net comment
+```
+
+Давайте посмотрим как выглядит сетевой стек Linux в
+текущий момент, опираясь на схему из предыдущего
+слайда:
+1) Зайдём по ssh на docker-host и установите пакет bridge-utils:
+```
+> docker-machine ssh docker-host
+> sudo apt-get update && sudo apt-get install bridge-utils
+```
+3) Выполним:
+```
+> docker network ls
+```
+4) Найдём ID сетей, созданных в рамках проекта:
+```
+yc-user@docker-host6:~$ sudo docker network ls
+NETWORK ID     NAME        DRIVER    SCOPE
+884aeb9b795a   back_net    bridge    local
+0873e63bbe3a   bridge      bridge    local
+7a467eadfd14   front_net   bridge    local
+4ecd432d4a5e   host        host      local
+9b1eaacf4bba   none        null      local
+36b3d5878b6c   reddit      bridge    local
+cd7674c32c9e   reddit2     bridge    local
+```
+
+4) Выполним :
+```
+> ifconfig | grep br
+```
+```
+yc-user@docker-host6:~$ ifconfig | grep br
+br-36b3d5878b6c: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        inet 172.18.0.1  netmask 255.255.0.0  broadcast 172.18.255.255
+br-7a467eadfd14: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 10.0.1.1  netmask 255.255.255.0  broadcast 10.0.1.255
+br-884aeb9b795a: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 10.0.2.1  netmask 255.255.255.0  broadcast 10.0.2.255
+br-cd7674c32c9e: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        inet 172.19.0.1  netmask 255.255.0.0  broadcast 172.19.255.255
+        inet 172.17.0.1  netmask 255.255.0.0  broadcast 172.17.255.255
+        inet 10.130.0.7  netmask 255.255.255.0  broadcast 10.130.0.255
+```
+5) Найдём bridge-интерфейсы для каждой из сетей. Просмотрим
+информацию о каждом.
+6) Выберим любой из bridge-интерфейсов и выполним команду. Ниже
+пример вывода:
+```
+yc-user@docker-host6:~$ brctl show br-36b3d5878b6c
+bridge name	bridge id		STP enabled	interfaces
+br-36b3d5878b6c		8000.0242945cd971	no	
+```
+```
+yc-user@docker-host6:~$ brctl show br-7a467eadfd14
+bridge name	bridge id		STP enabled	interfaces
+br-7a467eadfd14		8000.02424f04624b	no		veth5fbc5bc
+							veth660913e
+							veth95e90f0
+```
+
+
+```
+yc-user@docker-host6:~$ brctl show br-884aeb9b795a
+bridge name	bridge id		STP enabled	interfaces
+br-884aeb9b795a		8000.02420e790119	no		veth026f3cb
+							veth3db4cb7
+							vethd29882b
+```
+
+```
+yc-user@docker-host6:~$ brctl show br-cd7674c32c9e
+bridge name	bridge id		STP enabled	interfaces
+br-cd7674c32c9e		8000.0242da6fbc64	no		
+```
+
+7) Давайте посмотрим как выглядит iptables. Выполним:
+```
+yc-user@docker-host6:~$ sudo iptables -nL -t nat
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination         
+DOCKER     all  --  0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+DOCKER     all  --  0.0.0.0/0           !127.0.0.0/8          ADDRTYPE match dst-type LOCAL
+
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination         
+MASQUERADE  all  --  10.0.1.0/24          0.0.0.0/0           
+MASQUERADE  all  --  10.0.2.0/24          0.0.0.0/0           
+MASQUERADE  all  --  172.19.0.0/16        0.0.0.0/0           
+MASQUERADE  all  --  172.17.0.0/16        0.0.0.0/0           
+MASQUERADE  all  --  172.18.0.0/16        0.0.0.0/0           
+MASQUERADE  tcp  --  10.0.1.2             10.0.1.2             tcp dpt:9292
+
+Chain DOCKER (2 references)
+target     prot opt source               destination         
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+DNAT       tcp  --  0.0.0.0/0            0.0.0.0/0            tcp dpt:9292 to:10.0.1.2:9292
+```
+Цепочка Docker и правила DNAT отвечают за перенаправление трафика на адреса уже конкретных контейнеров.
+
+Выполним команду:
+```
+yc-user@docker-host6:~$ ps ax | grep docker-proxy
+ 3886 ?        Sl     0:00 /usr/bin/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 9292 -container-ip 10.0.1.2 -container-port 9292
+ 3893 ?        Sl     0:00 /usr/bin/docker-proxy -proto tcp -host-ip :: -host-port 9292 -container-ip 10.0.1.2 -container-port 9292
+11380 pts/0    S+     0:00 grep --color=auto docker-proxy
+```
+### DOCKER-COMPOSE
+Отметим, что docker-compose поддерживает интерполяцию (подстановку) переменных окружения. В данном случае это переменная USERNAME.
+Поэтому перед запуском необходимо экспортировать значения данных переменных окружения.
+Остановим контейнеры, запущенные на предыдущих шагах:
+```
+> docker kill $(docker ps -q)
+```
+Выполним:
+```
+> export USERNAME=danoque
+> docker-compose up -d
+Creating src_comment_1 ... done
+Creating src_ui_1      ... done
+Creating src_post_1    ... done
+Creating src_post_db_1 ... done
+```
+```
+> danoque@danoque:~/Devops/docker-3/src$ docker-compose ps
+    Name                  Command             State                    Ports                  
+----------------------------------------------------------------------------------------------
+src_comment_1   puma                          Up                                              
+src_post_1      python3 post_app.py           Up                                              
+src_post_db_1   docker-entrypoint.sh mongod   Up      27017/tcp                               
+src_ui_1        puma                          Up      0.0.0.0:9292->9292/tcp,:::9292->9292/tcp
+```
+
+### Задания:
+1)Изменить docker-compose под кейс с множеством сетей, сетевых алиасов. Параметризируем с помощью переменных окружений.Параметризованные параметры запишим в отдельный файл c расширением .env:
+• порт публикации сервиса ui
+• версии сервисов
+
+### Параметризация сетей в Docker-Compose
+Для определения имени проекта базовое имя проекта задаётся через COMPOSE_PROJECT_NAME также в файле .ENV.
+
+
+## Домашнее задание №20 Устройство Gitlab CI.
+ДЗ 16: Gitlab CI. Построение процесса непрерывной интеграции
+
+###  Создание виртуальной машины при помощи web-консоли, установка Docker-Machine и запуск контейнера
+Запустим GitLab с помощью Docker, в команде определим все необходимые значения: IP, password, директории под Data Volume; в hostname укажем IP адрес ВМ.
+
+```
+docker run -d -v $GITLAB_HOME/config:/etc/gitlab -v $GITLAB_HOME/logs:/var/log/gitlab -v $GITLAB_HOME/data:/var/opt/gitlab --hostname 62.84.123.174 -p 443:443 -p 80:80 -p 2222:22 -e GITLAB_ROOT_EMAIL="root@local" -e GITLAB_ROOT_PASSWORD="danoquedanoque" -e EXTERNAL_URL="62.84.123.174" --name gitlab --restart unless-stopped gitlab/gitlab-ce:latest
+```
+
+Чтобы использовать репозиторий проекта GitLab, добавим ещё один remote к нашему локальному microservices-репозиторию:
+```
+git checkout -b gitlab-ci-1
+git remote add gitlab http://<your-vm-ip>/homework/example.git
+git push gitlab gitlab-ci-1
+```
+
+
+### Определение CI/CD Pipeline.
+
+Пайплайн для GitLab определяется в файле .gitlab-ci.yml. Создайте его в
+корне репозитория. И запушим его:
+```
+git add .gitlab-ci.yml
+git commit -m 'add pipeline definition'
+git push gitlab gitlab-ci-1
+```
+
+Теперь, если перейти в раздел
+CI/CD -> Pipelines , мы увидим что пайплайн попытался запуститься, но находится в статусе pending или stuck , так как у нас пока нет раннеров.
+
+### Cоздим и зарегистририруем раннер.
+
+Для регистрации нужен токен. Увидеть его можно в настройках проекта: Settings -> CI/CD -> Pipelines -> Runners и посмотреть на секцию Set up a specific Runner manually .
+На сервере, где работает Gitlab CI, выполним команду:
+```
+docker run -d --name gitlab-runner --restart always -v /srv/gitlab-runner/config:/etc/gitlab-runner -v /var/run/docker.sock:/var/run/docker.sock gitlab/gitlab-runner:latest
+```
+```
+docker exec -it gitlab-runner gitlab-runner register --url http://62.84.123.174 --non-interactive --locked=false --name DockerRunner --executor docker --docker-image alpine:latest --registration-token MyF5jQjszAqd6aRw9MGs --tag-list "linux,xenial,ubuntu,docker" --run-untagged
+```
+В настройках появится новый раннер, а пайплайн будет запущен.
+
+
+### Добавим Reddit  в репозиторий:
+Добавм исходный код reddit в репозиторий:
+```
+git clone https://github.com/express42/reddit.git && rm -rf ./reddit/.git
+git add reddit/
+git commit -m "Add reddit app"
+git push gitlab gitlab-ci-1
+```
+
+Изменим описание пайплайна в .gitlab-ci.yml:
+```
+image: ruby:2.4.2
+stages:
+...
+variables:
+DATABASE_URL: 'mongodb://mongo/user_posts'
+before_script:
+- cd reddit
+- bundle install
+...
+test_unit_job:
+stage: test
+services:
+- mongo:latest
+script:
+- ruby simpletest.rb
+```
+В папке reddit создадим simpletest.rb: https://gist.github.com/Nklya/d70ff7c6d1c02de8f18bcd049e904942
+
+И добавим библиотеку rack-test для тестирования в файл reddit/Gemfile.
+Сделаем push в GitLab и убедимся что test_unut_job проводит тесты.
+
+Изменим пайплайн таким образом, чтобы deploy_job стал определением окружения dev, на которое условно будет выкатываться каждое изменение в коде проекта.
+
+Переименуем stage deploy в review, а deploy_job заменим на deploy_dev_job и определим окружение в ней
+
+Если после успешного завершения пайплайна с определением окружения перейти в Operations -> Environments , то там появится определение первого окружения
+
+PHOTO 2
+
+
+### Staging и Production
+
+Определим два новых этапа: stage и production. Первый будет
+содержать задачу, имитирующую выкатку на окружение staging, второй - на
+production.
+
+
+Определим эти задачи таким образом, чтобы они запускались вручную,
+с помощью аргумента when: manual. И На странице окружений должны появиться окружения staging и production.
+
+Директива only описывает список условий, которые должны быть истинны, чтобы job мог запуститься. Регулярное выражение слева означает, что должен стоять semver тэг в git, например 2.4.10 .
+
+Изменения без указания тэга запустят пайплайн без задач staging и
+production.
+Изменение, помеченное тэгом в git, запустит полный пайплайн.
+```
+git commit -am '#4 add logout button to profile page'
+git tag 2.4.10
+git push gitlab gitlab-ci-1 --tags
+```
+
+Gitlab CI позволяет определить динамические окружения. Эта мощная
+функциональность позволяет вам иметь выделенный стенд для, например,
+каждой feature-ветки в git.
+Определяются динамические окружения с помощь переменных, доступных в .gitlab-ci.yml
+
+Добавим ещё одну задачу. Эта задача определяет динамическое окружение для каждой ветки в репозитории, кроме ветки master.
+```
+...
+branch review:
+stage: review
+script: echo "Deploy to $CI_ENVIRONMENT_SLUG"
+environment:
+name: branch/$CI_COMMIT_REF_NAME
+url: http://$CI_ENVIRONMENT_SLUG.example.com
+only:
+- branches
+except:
+- master
+staging
+```
+Теперь на каждую ветку в git, отличную от master, Gitlab CI будет определять новое окружение.
+
+
+## Домашнее задание №22 Введение в мониторинг. Модели и принципы работы систем мониторинга
+
+## 17 ДЗ: Создание и запуск системы мониторинга Prometheus.
+
+Создадим ресурс:
+
+```
+yc compute instance create --name docker-host12 --zone ru-central1-a --network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --create-boot-disk image-folder-id=standard-images,image-family=ubuntu-1804-lts,size=15 --ssh-key ~/.ssh/id_rsa.pub
+```
+И докер хост на нём:
+
+```
+docker-machine create --driver generic --generic-ip-address=84.201.158.65 --generic-ssh-user yc-user --generic-ssh-key ~/.ssh/id_rsa docker-host12
+```
+
+Соберём образ  prometheus:
+```
+$ export USER_NAME=danoque
+$ docker build -t $USER_NAME/prometheus .
+danoque@danoque:~/Devops/monitoring-1/danoque_microservices$ docker run --rm -p 9090:9090 -d --name prometheus prom/prometheus
+...
+Digest: sha256:e9620d250b16ffe0eb9e3eac7dd76151848424c17d577632ae9ca61d1328687e
+Status: Downloaded newer image for prom/prometheus:latest
+7860c9b172e2a2d5893a8450a1796a18523c0701dbdbe0af418f64c1649b66d5
+danoque@danoque:~/Devops/monitoring-1/danoque_microservices$ docker ps
+CONTAINER ID   IMAGE             COMMAND                  CREATED         STATUS         PORTS                                       NAMES
+7860c9b172e2   prom/prometheus   "/bin/prometheus --c…"   3 minutes ago   Up 3 minutes   0.0.0.0:9090->9090/tcp, :::9090->9090/tcp   prometheus
+```
+
+В файле docker/.env установить теги сервисов post, comment, ui - latest.
+
+
+Соберем images микросервисов из директории каждого микросервиса:
+```
+/src/ui $ bash docker_build.sh
+/src/post-py $ bash docker_build.sh
+/src/comment $ bash docker_build.sh
+```
+
+Не забудем внести в docker-compose.yml aliases для сетей микросервисов:
+
+### mongodb:
+```yaml
+    networks:
+      back_net:
+        aliases:
+          - post_db
+          - comment_db
+```
+
+### post:
+```yaml
+    networks:
+      back_net:
+        aliases:
+          - post
+      front_net:
+        aliases:
+          - post
+```
+
+### comment:
+```yaml
+    networks:
+      back_net:
+        aliases:
+          - comment
+      front_net:
+        aliases:
+          - comment
+```
+
+Запустим микросервисы в каталоге c помощью0 командоы docker-compose  -f docker-compose.yml up -d.
+
+```
+danoque@danoque:~/Devops/monitoring-1/danoque_microservices/docker$ docker-compose ps
+         Name                       Command               State                    Ports                  
+----------------------------------------------------------------------------------------------------------
+docker_comment_1         puma                             Up                                              
+docker_node-exporter_1   /bin/node_exporter --path. ...   Up      9100/tcp                                
+docker_post_1            python3 post_app.py              Up                                              
+docker_post_db_1         docker-entrypoint.sh mongod      Up      27017/tcp                               
+docker_prometheus_1      /bin/prometheus --config.f ...   Up      0.0.0.0:9090->9090/tcp,:::9090->9090/tcp
+docker_ui_1              puma                             Up      0.0.0.0:9292->9292/tcp,:::9292->9292/tcp
+```
+### Сбор метрик хоста
+
+Добавим сервис Node-exporter в docker/docker-compose.yml файл, и настройки сети для него, запустим:
+```
+docker-compose -f docker-compose.yml up -d node-exporter
+```
+
+Добавим в конфиг .../monitoring/prometheus/prometheus.yml job опроса node-exporter и выполним сборку нового Docker для Prometheus:
+
+```
+docker build -t $USER_NAME/prometheus .
+```
+Перезапустим сервисы:
+
+```
+$ docker-compose  -f docker-compose.yml down
+$ docker-compose  -f docker-compose.yml up -d
+```
+
+В списке endpoint-ов Prometheus появился endpoint Node. А также возможность просматривать его метрики.
+
+### Загрузка собранных образов на DockerHub
+
+Ссылки на загруженные образы:
+
+https://hub.docker.com/r/danoque/prometheus
+https://hub.docker.com/r/danoque/post
+https://hub.docker.com/r/danoque/comment
+https://hub.docker.com/r/danoque/ui
+
